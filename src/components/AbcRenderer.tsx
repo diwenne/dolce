@@ -9,78 +9,68 @@ interface AbcRendererProps {
 }
 
 // Cursor control class for playback visualization
+// Helper to format time
+function formatTime(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+// Cursor control class for playback visualization
 class CursorControl {
-  private cursor: SVGLineElement | null = null;
-  private svg: SVGSVGElement | null = null;
-  private lastHighlighted: SVGElement[] = [];
+  cursor: HTMLDivElement | null = null;
+  root: HTMLDivElement | null = null;
 
-  onStart() {
-    // Remove any existing cursor
-    if (this.cursor) {
-      this.cursor.remove();
+  constructor(root: HTMLDivElement) {
+    this.root = root;
+    this.cursor = document.createElement("div");
+    this.cursor.setAttribute("class", "abcjs-cursor");
+    this.cursor.style.position = "absolute";
+    this.cursor.style.backgroundColor = "blue";
+    this.cursor.style.width = "2px";
+    this.cursor.style.height = "0px";
+    this.cursor.style.top = "0px";
+    this.cursor.style.left = "0px";
+    this.cursor.style.zIndex = "20";
+    this.cursor.style.pointerEvents = "none";
+    this.root.appendChild(this.cursor);
+  }
+
+  remove() {
+    if (this.cursor && this.cursor.parentNode) {
+      this.cursor.parentNode.removeChild(this.cursor);
     }
   }
 
-  onEvent(event: {
-    elements?: SVGElement[][];
-    measureStart?: boolean;
-    left?: number;
-    top?: number;
-    height?: number;
-  }) {
-    // Remove previous highlights
-    this.lastHighlighted.forEach((el) => {
-      el.classList.remove("abcjs-highlight");
-    });
-    this.lastHighlighted = [];
-
-    // Highlight current notes
-    if (event.elements) {
-      event.elements.forEach((elementGroup) => {
-        elementGroup.forEach((element) => {
-          if (element) {
-            element.classList.add("abcjs-highlight");
-            this.lastHighlighted.push(element);
-
-            // Create/move cursor line
-            if (!this.svg) {
-              this.svg = element.closest("svg");
-            }
-            if (this.svg && event.left !== undefined && event.top !== undefined && event.height !== undefined) {
-              this.updateCursor(event.left, event.top, event.height);
-            }
-          }
-        });
-      });
+  onEvent(event: any) {
+    // Hide cursor if event is null (end of playback) or no elements
+    if (event === null) {
+      if (this.cursor) this.cursor.style.display = "none";
+      return;
     }
-  }
-
-  private updateCursor(left: number, top: number, height: number) {
-    if (!this.svg) return;
-
-    if (!this.cursor) {
-      this.cursor = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      this.cursor.setAttribute("class", "abcjs-cursor");
-      this.cursor.setAttribute("stroke", "#10b981");
-      this.cursor.setAttribute("stroke-width", "2");
-      this.svg.appendChild(this.cursor);
-    }
-
-    this.cursor.setAttribute("x1", String(left));
-    this.cursor.setAttribute("x2", String(left));
-    this.cursor.setAttribute("y1", String(top));
-    this.cursor.setAttribute("y2", String(top + height));
-  }
-
-  onFinished() {
-    // Remove highlights and cursor
-    this.lastHighlighted.forEach((el) => {
-      el.classList.remove("abcjs-highlight");
-    });
-    this.lastHighlighted = [];
-    if (this.cursor) {
-      this.cursor.remove();
-      this.cursor = null;
+    
+    // Check for elements or layout properties
+    // abcjs TimingCallbacks event structure:
+    // { milliseconds: number, top: number, left: number, width: number, height: number, elements: [] }
+    // We use the layout properties if available.
+    
+    // Note: The 'left' property from abcjs is relative to the SVG. 
+    // Since our cursor is absolute in the container, and the SVG is in the container,
+    // we might need to query the SVG offset if there's padding.
+    // However, usually abcjs renders SVG at 0,0 of the container (excluding padding).
+    // The container has p-4 (1rem = 16px).
+    // So we might need to add offset? 
+    // Let's rely on visual alignment for now or adjust.
+    // Actually, getting the SVG element's position relative to root is safer.
+    // But let's start with direct assignment.
+    
+    if (this.cursor && event.left !== undefined) {
+       this.cursor.style.display = "block";
+       this.cursor.style.left = (event.left + 16) + "px"; // +16 for p-4 padding assumption
+       this.cursor.style.top = (event.top + 48) + "px"; // +48 for pt-12 (3rem) assumption
+       this.cursor.style.height = (event.height || 20) + "px";
+    } else if (this.cursor) {
+       this.cursor.style.display = "none";
     }
   }
 }
@@ -123,6 +113,7 @@ export default function AbcRenderer({
   const synthRef = useRef<any>(null);
   const visualObjRef = useRef<abcjs.TuneObject[] | null>(null);
   const cursorControlRef = useRef<CursorControl | null>(null);
+  const timingCallbacksRef = useRef<abcjs.TimingCallbacks | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Initialize and render
@@ -163,6 +154,22 @@ export default function AbcRenderer({
         // Check if render was successful
         if (visualObj && visualObj.length > 0) {
           visualObjRef.current = visualObj;
+          
+          // Initialize TimingCallbacks for Playback Cursor
+          if (visualObj[0]) {
+             const cursorControl = new CursorControl(containerRef.current);
+             cursorControlRef.current = cursorControl;
+             
+             // Create TimingCallbacks with qpm from tune or default
+             const timingCallbacks = new abcjs.TimingCallbacks(visualObj[0], {
+                 eventCallback: (event) => {
+                     cursorControl.onEvent(event);
+                     return undefined;
+                 }
+             });
+             timingCallbacksRef.current = timingCallbacks;
+          }
+
         } else {
           visualObjRef.current = null;
           console.warn("abcjs: No valid tunes rendered from notation");
@@ -198,71 +205,14 @@ export default function AbcRenderer({
         clearInterval(timerRef.current);
       }
       if (cursorControlRef.current) {
-        cursorControlRef.current.onFinished();
+        cursorControlRef.current.remove();
+        cursorControlRef.current = null;
       }
+      timingCallbacksRef.current = null;
     };
   }, [notation, onElementClick]);
 
-  const handlePlayStop = useCallback(async () => {
-    if (isPlaying && synthRef.current) {
-      synthRef.current.stop();
-      setIsPlaying(false);
-      if (cursorControlRef.current) {
-        cursorControlRef.current.onFinished();
-      }
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-      return;
-    }
 
-    if (!visualObjRef.current || visualObjRef.current.length === 0) return;
-
-    try {
-      // Initialize cursor control
-      const cursorControl = new CursorControl();
-      cursorControlRef.current = cursorControl;
-
-      // Create synth with timing callbacks
-      const synth = new abcjs.synth.CreateSynth();
-      await synth.init({
-        visualObj: visualObjRef.current[0],
-        options: {
-          soundFontUrl: "https://paulrosen.github.io/midi-js-soundfonts/FluidR3_GM/",
-        },
-      });
-
-      // Prime the audio
-      await synth.prime();
-      synthRef.current = synth;
-
-      // Start cursor
-      cursorControl.onStart();
-
-      // Setup timing callback using abcjs TimingCallbacks
-      const timingCallbacks = new abcjs.TimingCallbacks(visualObjRef.current[0], {
-        eventCallback: (event: unknown) => {
-          if (event) {
-            cursorControl.onEvent(event as Parameters<CursorControl["onEvent"]>[0]);
-          } else {
-            // Playback finished
-            cursorControl.onFinished();
-            setIsPlaying(false);
-          }
-          return undefined;
-        },
-      });
-
-      // Start playback
-      synth.start();
-      timingCallbacks.start();
-      setIsPlaying(true);
-
-    } catch (err) {
-      console.error("Audio playback error:", err);
-      setIsPlaying(false);
-    }
-  }, [isPlaying]);
 
   // Pro playback using Python backend
   const [playbackState, setPlaybackState] = useState<'stopped' | 'loading' | 'playing' | 'paused'>('stopped');
@@ -340,6 +290,87 @@ export default function AbcRenderer({
     }
   }, []);
 
+  // Animation Frame Loop for Cursor Sync
+  useEffect(() => {
+      let animationFrameId: number;
+
+      const updateLoop = () => {
+          if (playbackState === 'playing' && proAudioRef.current && timingCallbacksRef.current) {
+              const currentTime = proAudioRef.current.currentTime;
+              const duration = proAudioRef.current.duration;
+              
+              if (duration > 0) {
+                 const percent = currentTime / duration;
+                 // Note: abcjs setProgress expects 0-1 if 'units' not specified? 
+                 // Actually doc says 0 to 1.
+                 timingCallbacksRef.current.setProgress(percent);
+              }
+              
+              // Also update seek bar if we implement one (using React state for value?)
+              // To avoid too many re-renders, we might update Seek Bar logic via ref?
+              // Or just setState here (might be 60fps, careful).
+          }
+          animationFrameId = requestAnimationFrame(updateLoop);
+      };
+      
+      if (playbackState === 'playing') {
+          animationFrameId = requestAnimationFrame(updateLoop);
+      }
+
+      return () => {
+          cancelAnimationFrame(animationFrameId);
+      };
+  }, [playbackState]);
+
+  // Handle Seek Bar Change
+  const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+     const value = parseFloat(e.target.value);
+     if (proAudioRef.current) {
+         proAudioRef.current.currentTime = value;
+         
+         // Initial update of cursor immediately
+         if (timingCallbacksRef.current && proAudioRef.current.duration > 0) {
+             timingCallbacksRef.current.setProgress(value / proAudioRef.current.duration);
+         }
+     }
+  }, []);
+
+  // Update current time for seek bar display (using state for smooth UI?)
+  // Using state for seek bar value might cause re-renders. 
+  // Let's use a lightweight update or just re-render. React 18 is fast.
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  useEffect(() => {
+     if (!proAudioRef.current) return;
+     
+     const onTimeUpdate = () => {
+         setCurrentTime(proAudioRef.current?.currentTime || 0);
+     };
+     const onDurationChange = () => {
+         setDuration(proAudioRef.current?.duration || 0);
+     };
+     
+     proAudioRef.current.addEventListener('timeupdate', onTimeUpdate);
+     proAudioRef.current.addEventListener('durationchange', onDurationChange);
+     
+     return () => {
+         proAudioRef.current?.removeEventListener('timeupdate', onTimeUpdate);
+         proAudioRef.current?.removeEventListener('durationchange', onDurationChange);
+     }
+  }, [playbackState]); // Update listeners when audio ref changes (re-created on Play) OR just check ref in loop.
+  // Actually proAudioRef changes on Play. So we need to bind listeners when it's set.
+  // The handlePlayPro logic sets proAudioRef.current. 
+  // We can add listeners there, or use a separate effect that depends on proAudioRef.current? 
+  // Ref deps in useEffect are tricky. 
+  // Let's bind 'timeupdate' inside handlePlayPro for simplicity, or use the RAF loop to update local state?
+  // RAF loop updates cursor. Can also update State for Seek Bar.
+  
+  // Revised RAF Loop:
+  // Updates cursor via TimingCallbacks
+  // Updates currentTime State for Seek Bar
+
+
   return (
     <div className="relative w-full h-full">
       {/* Hidden audio control div */}
@@ -395,6 +426,22 @@ export default function AbcRenderer({
           </button>
         )}
       </div>
+
+      {/* Seek Bar (Visible when audio is loaded) */}
+      {(playbackState === 'playing' || playbackState === 'paused') && (
+        <div className="absolute bottom-4 left-4 right-4 z-10 flex items-center gap-2 bg-zinc-800/80 p-2 rounded-lg backdrop-blur-sm">
+            <span className="text-xs text-white family-mono">{formatTime(currentTime)}</span>
+            <input 
+                type="range" 
+                min="0" 
+                max={duration || 100} 
+                value={currentTime} 
+                onChange={handleSeek}
+                className="flex-1 h-2 bg-zinc-600 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+            />
+            <span className="text-xs text-zinc-400 family-mono">{formatTime(duration)}</span>
+        </div>
+      )}
 
       {/* Sheet Music Container */}
       <div
