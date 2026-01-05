@@ -67,7 +67,7 @@ export default function Home() {
       <header className="flex items-center justify-between px-6 py-3 border-b border-zinc-700 bg-zinc-800">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight font-[family-name:var(--font-playfair)]">
-            <span className="text-white">Legato</span>
+            <span className="text-white">Dolce</span>
           </h1>
           <span className="text-xs text-zinc-500">The AI-Native Composer</span>
         </div>

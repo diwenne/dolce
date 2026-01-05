@@ -19,7 +19,7 @@ const playfair = Playfair_Display({
 });
 
 export const metadata: Metadata = {
-  title: "Legato - The AI-Native Composer",
+  title: "Dolce - The AI-Native Composer",
   description: "The AI-Native Composer for Piano",
 };
 

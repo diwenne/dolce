@@ -86,6 +86,102 @@ class CursorControl {
   }
 }
 
+/**
+ * Preprocess ABC notation to make it compatible with abcjs renderer.
+ * Strips MIDI-specific extensions. If multi-voice, extract just the melody (V:1).
+ */
+function preprocessAbcForRendering(abc: string): string {
+  const lines = abc.split('\n');
+  const resultLines: string[] = [];
+  let currentVoice: string | null = null;
+  let hasMultipleVoices = false;
+  let inHeader = true;
+  
+  // First pass: detect if multiple voices and clean MIDI stuff
+  for (const line of lines) {
+    const trimmed = line.trim();
+    
+    // Detect voice definitions
+    if (/^V:\s*\S+/.test(trimmed)) {
+      const match = trimmed.match(/^V:\s*(\S+)/);
+      if (match && match[1] !== '1') {
+        hasMultipleVoices = true;
+      }
+    }
+  }
+  
+  // Second pass: build the result
+  for (const line of lines) {
+    const trimmed = line.trim();
+    
+    // Skip empty lines and comments
+    if (trimmed === '' || (trimmed.startsWith('%') && !trimmed.startsWith('%%'))) {
+      continue;
+    }
+    
+    // Remove MIDI-only directives
+    if (trimmed.startsWith('%%MIDI')) {
+      continue;
+    }
+    
+    // Handle voice definitions in header
+    if (/^V:\s*\S+/.test(trimmed)) {
+      const voiceMatch = trimmed.match(/^V:\s*(\S+)/);
+      if (voiceMatch) {
+        const voiceId = voiceMatch[1];
+        
+        // If this is a header voice definition (before K:)
+        if (inHeader) {
+          // Clean it but only include V:1 for multi-voice pieces
+          if (!hasMultipleVoices || voiceId === '1') {
+            let cleanedLine = `V:${voiceId}`;
+            const clefMatch = trimmed.match(/clef=\S+/i);
+            if (clefMatch) cleanedLine += ' ' + clefMatch[0];
+            resultLines.push(cleanedLine);
+          }
+        } else {
+          // Voice switch in body
+          currentVoice = voiceId;
+          // For multi-voice, only add V:1 switch (skip others)
+          if (!hasMultipleVoices) {
+            resultLines.push(`V:${voiceId}`);
+          }
+        }
+        continue;
+      }
+    }
+    
+    // K: ends the header
+    if (/^K:\s*\S+/.test(trimmed)) {
+      resultLines.push(trimmed);
+      inHeader = false;
+      currentVoice = '1'; // Start assuming voice 1
+      continue;
+    }
+    
+    // Header lines - just clean and add
+    if (inHeader && /^[A-Za-z]:/.test(trimmed)) {
+      resultLines.push(trimmed);
+      continue;
+    }
+    
+    // Music content
+    if (!inHeader) {
+      // For multi-voice pieces, only include voice 1 content
+      if (hasMultipleVoices) {
+        if (currentVoice === '1') {
+          resultLines.push(trimmed);
+        }
+        // Skip other voices
+      } else {
+        resultLines.push(trimmed);
+      }
+    }
+  }
+  
+  return resultLines.join('\n');
+}
+
 export default function AbcRenderer({
   notation,
   onElementClick,
@@ -107,7 +203,9 @@ export default function AbcRenderer({
 
     if (containerRef.current && notation) {
       try {
-        const visualObj = abcjs.renderAbc(containerRef.current, notation, {
+        // Preprocess notation to strip MIDI-specific extensions for rendering
+        const renderableNotation = preprocessAbcForRendering(notation);
+        const visualObj = abcjs.renderAbc(containerRef.current, renderableNotation, {
           responsive: "resize",
           add_classes: true,
           clickListener: (

@@ -1,5 +1,5 @@
 """
-Legato Backend: Expressive ABC to Audio Synthesis
+Dolce Backend: Expressive ABC to Audio Synthesis
 Uses music21 for ABC parsing and FluidSynth for high-quality audio synthesis.
 """
 
@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Legato Audio Synthesis API",
+    title="Dolce Audio Synthesis API",
     description="Convert ABC notation to high-quality audio using music21 and FluidSynth",
     version="1.0.0",
 )
@@ -205,7 +205,7 @@ async def synthesize(request: SynthesizeRequest):
         return FileResponse(
             audio_path,
             media_type="audio/wav",
-            filename="legato_output.wav",
+            filename="dolce_output.wav",
         )
 
     except Exception as e:
@@ -471,7 +471,7 @@ def root():
     """Root endpoint with API info."""
     soundfont = find_soundfont()
     return {
-        "name": "Legato Audio Synthesis API",
+        "name": "Dolce Audio Synthesis API",
         "device": DEVICE,
         "soundfont_status": "ready" if soundfont else "missing",
         "soundfont_path": str(soundfont) if soundfont else None,

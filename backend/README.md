@@ -1,4 +1,4 @@
-# Legato Backend
+# Dolce Backend
 
 Python backend for high-quality ABC notation to audio synthesis.
 
