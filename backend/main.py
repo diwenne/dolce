@@ -124,7 +124,7 @@ def preprocess_abc_for_midi(abc_content: str) -> str:
                  continue
                  
         # Strip dynamics !...! which can cause abc2midi to drop lines
-        line = re.sub(r'![^!]+!', '', line)
+        # line = re.sub(r'![^!]+!', '', line)
         
         # Strip inline comments
         if '%' in line:
