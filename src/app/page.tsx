@@ -135,9 +135,85 @@ export default function Home() {
     setAbcNotation(e.target.value);
   };
 
+  // Transcription State
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isTranscribedPlaying, setIsTranscribedPlaying] = useState(false);
+  const transcribedAudioRef = useRef<HTMLAudioElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   // Callback for when transcription updates the notation
   const handleTranscriptionResult = useCallback((newNotation: string) => {
     setAbcNotation(newNotation);
+  }, []);
+
+  const handleTranscribeClick = useCallback(() => {
+    // If already playing transcribed audio, stop it
+    if (transcribedAudioRef.current) {
+      transcribedAudioRef.current.pause();
+      transcribedAudioRef.current = null;
+      setIsTranscribedPlaying(false);
+      return;
+    }
+    // Open file picker
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset file input for future selections
+    e.target.value = "";
+
+    setIsTranscribing(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      // Use /transcribe-to-abc endpoint to get both ABC notation and audio
+      const response = await fetch("http://localhost:8000/transcribe-to-abc", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || "Transcription failed");
+      }
+
+      const result = await response.json();
+
+      // Update the notation in the parent component for sheet music display
+      if (result.abc) {
+        setAbcNotation(result.abc);
+      }
+
+      // Play the audio (base64 encoded) if available
+      if (result.audio_base64) {
+        const audioBlob = new Blob(
+          [Uint8Array.from(atob(result.audio_base64), c => c.charCodeAt(0))],
+          { type: 'audio/wav' }
+        );
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        transcribedAudioRef.current = audio;
+
+        audio.onended = () => {
+          transcribedAudioRef.current = null;
+          setIsTranscribedPlaying(false);
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        await audio.play();
+        setIsTranscribedPlaying(true);
+      }
+    } catch (err) {
+      console.error("Transcription error:", err);
+      alert(`Transcription error: ${err}`);
+    } finally {
+      setIsTranscribing(false);
+    }
   }, []);
 
   const handleElementClick = useCallback(
@@ -192,6 +268,48 @@ export default function Home() {
           <span className="text-xs text-zinc-500 bg-zinc-700 px-2 py-1 rounded">
             Cmd+K for AI
           </span>
+          
+           {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/wav,audio/*"
+            onChange={handleFileSelected}
+            className="hidden"
+          />
+
+          {/* Transcribe Button */}
+          <button
+            onClick={handleTranscribeClick}
+            disabled={isTranscribing}
+            className="flex items-center gap-2 px-3 py-1 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 text-white text-xs font-medium rounded transition-colors shadow-sm"
+            title="Upload audio and transcribe to piano"
+          >
+            {isTranscribing ? (
+              <>
+                <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Transcribing...
+              </>
+            ) : isTranscribedPlaying ? (
+              <>
+                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                  <rect x="6" y="4" width="4" height="16" />
+                  <rect x="14" y="4" width="4" height="16" />
+                </svg>
+                Stop Audio
+              </>
+            ) : (
+              <>
+                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z" />
+                </svg>
+                Transcribe Audio
+              </>
+            )}
+          </button>
         </div>
       </header>
 

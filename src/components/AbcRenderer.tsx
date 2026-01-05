@@ -6,7 +6,6 @@ import abcjs from "abcjs";
 interface AbcRendererProps {
   notation: string;
   onElementClick?: (position: { start: number; end: number }) => void;
-  onNotationChange?: (newNotation: string) => void;
 }
 
 // Cursor control class for playback visualization
@@ -116,7 +115,6 @@ function preprocessAbcForRendering(abc: string): string {
 export default function AbcRenderer({
   notation,
   onElementClick,
-  onNotationChange,
 }: AbcRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const audioControlRef = useRef<HTMLDivElement>(null);
@@ -267,26 +265,26 @@ export default function AbcRenderer({
   }, [isPlaying]);
 
   // Pro playback using Python backend
-  const [isProLoading, setIsProLoading] = useState(false);
-  const [isProPlaying, setIsProPlaying] = useState(false);
+  const [playbackState, setPlaybackState] = useState<'stopped' | 'loading' | 'playing' | 'paused'>('stopped');
   const proAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Transcribe state
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [isTranscribedPlaying, setIsTranscribedPlaying] = useState(false);
-  const transcribedAudioRef = useRef<HTMLAudioElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
   const handlePlayPro = useCallback(async () => {
-    // Stop if already playing
-    if (proAudioRef.current) {
-      proAudioRef.current.pause();
-      proAudioRef.current = null;
-      setIsProPlaying(false);
+    // If paused, resume
+    if (playbackState === 'paused' && proAudioRef.current) {
+      await proAudioRef.current.play();
+      setPlaybackState('playing');
       return;
     }
 
-    setIsProLoading(true);
+    // If playing, pause (should use handlePause, but handling toggle here for safety)
+    if (playbackState === 'playing' && proAudioRef.current) {
+      proAudioRef.current.pause();
+      setPlaybackState('paused');
+      return;
+    }
+
+    // New playback
+    setPlaybackState('loading');
 
     try {
       const response = await fetch("http://localhost:8000/synthesize", {
@@ -307,172 +305,95 @@ export default function AbcRenderer({
       proAudioRef.current = audio;
 
       audio.onended = () => {
+        setPlaybackState('stopped');
+        // Don't nullify ref immediately if we want to allow replay without re-fetch? 
+        // But for now, let's reset to allow re-synthesis or just re-play.
+        // User wants "Restart". If stopped, maybe we keep the audio? 
+        // For simplicity, stop clears it.
         proAudioRef.current = null;
-        setIsProPlaying(false);
         URL.revokeObjectURL(audioUrl);
       };
 
       await audio.play();
-      setIsProPlaying(true);
+      setPlaybackState('playing');
     } catch (err) {
       console.error("Pro playback error:", err);
       alert(`Pro playback error: ${err}`);
-    } finally {
-      setIsProLoading(false);
+      setPlaybackState('stopped');
     }
-  }, [notation]);
+  }, [notation, playbackState]);
 
-  const handleTranscribeClick = useCallback(() => {
-    // If already playing transcribed audio, stop it
-    if (transcribedAudioRef.current) {
-      transcribedAudioRef.current.pause();
-      transcribedAudioRef.current = null;
-      setIsTranscribedPlaying(false);
-      return;
+  const handlePause = useCallback(() => {
+    if (proAudioRef.current) {
+      proAudioRef.current.pause();
+      setPlaybackState('paused');
     }
-    // Open file picker
-    fileInputRef.current?.click();
   }, []);
 
-  const handleFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Reset file input for future selections
-    e.target.value = "";
-
-    setIsTranscribing(true);
-
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      // Use /transcribe-to-abc endpoint to get both ABC notation and audio
-      const response = await fetch("http://localhost:8000/transcribe-to-abc", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || "Transcription failed");
+  const handleRestart = useCallback(() => {
+    if (proAudioRef.current) {
+      proAudioRef.current.currentTime = 0;
+      if (proAudioRef.current.paused) {
+         proAudioRef.current.play(); 
       }
-
-      const result = await response.json();
-
-      // Update the notation in the parent component for sheet music display
-      if (onNotationChange && result.abc) {
-        onNotationChange(result.abc);
-      }
-
-      // Play the audio (base64 encoded)
-      if (result.audio_base64) {
-        const audioBlob = new Blob(
-          [Uint8Array.from(atob(result.audio_base64), c => c.charCodeAt(0))],
-          { type: 'audio/wav' }
-        );
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio(audioUrl);
-        transcribedAudioRef.current = audio;
-
-        audio.onended = () => {
-          transcribedAudioRef.current = null;
-          setIsTranscribedPlaying(false);
-          URL.revokeObjectURL(audioUrl);
-        };
-
-        await audio.play();
-        setIsTranscribedPlaying(true);
-      }
-    } catch (err) {
-      console.error("Transcription error:", err);
-      alert(`Transcription error: ${err}`);
-    } finally {
-      setIsTranscribing(false);
+      setPlaybackState('playing');
     }
-  }, [onNotationChange]);
+  }, []);
 
   return (
     <div className="relative w-full h-full">
       {/* Hidden audio control div */}
       <div ref={audioControlRef} className="hidden" />
 
-      {/* Hidden file input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="audio/wav,audio/*"
-        onChange={handleFileSelected}
-        className="hidden"
-      />
-
       {/* Button Container */}
       <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
-        {/* Transcribe Button */}
+        {/* Play/Pause Button */}
         <button
-          onClick={handleTranscribeClick}
-          disabled={isTranscribing}
-          className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 text-white text-sm font-medium rounded-md transition-colors shadow-md"
-          title="Upload audio and transcribe to piano"
+          onClick={playbackState === 'playing' ? handlePause : handlePlayPro}
+          disabled={playbackState === 'loading'}
+          className={`flex items-center gap-2 px-4 py-2 ${
+            playbackState === 'playing' ? 'bg-amber-600 hover:bg-amber-500' : 'bg-emerald-600 hover:bg-emerald-500'
+          } disabled:bg-emerald-800 text-white text-sm font-medium rounded-md transition-colors shadow-md`}
+          title={playbackState === 'playing' ? "Pause" : "Play High-Quality Audio"}
         >
-          {isTranscribing ? (
+          {playbackState === 'loading' ? (
             <>
               <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
-              Transcribing...
+              Loading...
             </>
-          ) : isTranscribedPlaying ? (
+          ) : playbackState === 'playing' ? (
             <>
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <rect x="6" y="4" width="4" height="16" />
                 <rect x="14" y="4" width="4" height="16" />
               </svg>
-              Stop
-            </>
-          ) : (
-            <>
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z" />
-              </svg>
-              Transcribe Audio
-            </>
-          )}
-        </button>
-
-        {/* Play Button */}
-        <button
-          onClick={handlePlayPro}
-          disabled={isProLoading}
-          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 text-white text-sm font-medium rounded-md transition-colors shadow-md"
-          title="High-quality playback (FluidSynth)"
-        >
-          {isProLoading ? (
-            <>
-              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              Synthesizing...
-            </>
-          ) : isProPlaying ? (
-            <>
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <rect x="6" y="4" width="4" height="16" />
-                <rect x="14" y="4" width="4" height="16" />
-              </svg>
-              Stop
+              Pause
             </>
           ) : (
             <>
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <polygon points="5,3 19,12 5,21" />
               </svg>
-              Play
+              {playbackState === 'paused' ? 'Resume' : 'Play'}
             </>
           )}
         </button>
+
+        {/* Restart Button - only visible when active (playing/paused) */}
+        {(playbackState === 'playing' || playbackState === 'paused') && (
+          <button
+            onClick={handleRestart}
+            className="flex items-center gap-2 px-3 py-2 bg-zinc-600 hover:bg-zinc-500 text-white text-sm font-medium rounded-md transition-colors shadow-md"
+            title="Restart from beginning"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Sheet Music Container */}
