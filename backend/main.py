@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+import music21
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,8 @@ app = FastAPI(
     description="Convert ABC notation to high-quality audio using music21 and FluidSynth",
     version="1.0.0",
 )
+
+print("\n\n--- LOADED LATEST VERSION (Refactor Complete) ---\n\n")
 
 # CORS for frontend
 app.add_middleware(
@@ -125,11 +128,6 @@ async def synthesize(request: SynthesizeRequest):
     midi_path = None
     audio_path = None
     
-    # Create temp files
-    with tempfile.NamedTemporaryFile(suffix=".abc", delete=False, mode="w") as abc_file:
-        abc_file.write(abc_content)
-        abc_path = abc_file.name
-
     with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as midi_file:
         midi_path = midi_file.name
     
@@ -137,16 +135,30 @@ async def synthesize(request: SynthesizeRequest):
         audio_path = audio_file.name
 
     try:
-        # Convert ABC to MIDI using abc2midi
-        logger.info(f"Converting ABC to MIDI: {abc_path} -> {midi_path}")
-        convert_cmd = ["abc2midi", abc_path, "-o", midi_path]
-        result = subprocess.run(convert_cmd, capture_output=True, text=True, timeout=10)
-        
-        if result.returncode != 0:
-            logger.error(f"abc2midi error: {result.stderr}")
-            # If standard error is empty, check stdout (abc2midi often prints errors there)
-            detail = result.stderr if result.stderr else result.stdout
-            raise Exception(f"abc2midi failed: {detail}")
+        # Convert ABC to MIDI using music21
+        logger.info(f"Converting ABC to MIDI using music21 (direct string)")
+        try:
+            # Parse ABC content
+            s = music21.converter.parse(abc_content, format='abc')
+            
+            # Workaround for music21 stream duplication bug:
+            # Extract just the notes/rests into a fresh stream
+            from copy import deepcopy
+            fresh_stream = music21.stream.Score()
+            for part in s.parts:
+                new_part = music21.stream.Part()
+                for element in part.flatten().notesAndRests:
+                    new_part.append(deepcopy(element))
+                fresh_stream.append(new_part)
+            
+            # If no parts found, try to use the score directly
+            if len(fresh_stream.parts) == 0:
+                fresh_stream = s
+            
+            fresh_stream.write('midi', fp=midi_path)
+        except Exception as e:
+            logger.error(f"music21 conversion error: {e}")
+            raise Exception(f"music21 conversion failed: {e}")
 
         # Synthesize to MIDI using direct FluidSynth call
         logger.info(f"Synthesizing with SoundFont: {soundfont}")
@@ -158,8 +170,6 @@ async def synthesize(request: SynthesizeRequest):
         # Clean up MIDI file
         if midi_path and os.path.exists(midi_path):
             os.unlink(midi_path)
-        if 'abc_path' in locals() and abc_path and os.path.exists(abc_path):
-            os.unlink(abc_path)
 
         # Return audio file
         logger.info(f"Returning audio file: {audio_path} ({os.path.getsize(audio_path)} bytes)")
@@ -173,8 +183,6 @@ async def synthesize(request: SynthesizeRequest):
     except Exception as e:
         logger.error(f"Synthesis error: {e}")
         # Clean up temp files on error
-        if 'abc_path' in locals() and abc_path and os.path.exists(abc_path):
-            os.unlink(abc_path)
         if midi_path and os.path.exists(midi_path):
             os.unlink(midi_path)
         if audio_path and os.path.exists(audio_path):
