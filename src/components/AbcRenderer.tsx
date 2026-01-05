@@ -6,6 +6,7 @@ import abcjs from "abcjs";
 interface AbcRendererProps {
   notation: string;
   onElementClick?: (position: { start: number; end: number }) => void;
+  onNotationChange?: (newNotation: string) => void;
 }
 
 // Cursor control class for playback visualization
@@ -88,6 +89,7 @@ class CursorControl {
 export default function AbcRenderer({
   notation,
   onElementClick,
+  onNotationChange,
 }: AbcRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const audioControlRef = useRef<HTMLDivElement>(null);
@@ -102,7 +104,7 @@ export default function AbcRenderer({
   useEffect(() => {
     // Only run on client side (abcjs needs DOM)
     if (typeof window === "undefined") return;
-    
+
     if (containerRef.current && notation) {
       try {
         const visualObj = abcjs.renderAbc(containerRef.current, notation, {
@@ -240,6 +242,12 @@ export default function AbcRenderer({
   const [isProPlaying, setIsProPlaying] = useState(false);
   const proAudioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Transcribe state
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isTranscribedPlaying, setIsTranscribedPlaying] = useState(false);
+  const transcribedAudioRef = useRef<HTMLAudioElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const handlePlayPro = useCallback(async () => {
     // Stop if already playing
     if (proAudioRef.current) {
@@ -250,7 +258,7 @@ export default function AbcRenderer({
     }
 
     setIsProLoading(true);
-    
+
     try {
       const response = await fetch("http://localhost:8000/synthesize", {
         method: "POST",
@@ -265,16 +273,16 @@ export default function AbcRenderer({
 
       const blob = await response.blob();
       const audioUrl = URL.createObjectURL(blob);
-      
+
       const audio = new Audio(audioUrl);
       proAudioRef.current = audio;
-      
+
       audio.onended = () => {
         proAudioRef.current = null;
         setIsProPlaying(false);
         URL.revokeObjectURL(audioUrl);
       };
-      
+
       await audio.play();
       setIsProPlaying(true);
     } catch (err) {
@@ -285,43 +293,158 @@ export default function AbcRenderer({
     }
   }, [notation]);
 
+  const handleTranscribeClick = useCallback(() => {
+    // If already playing transcribed audio, stop it
+    if (transcribedAudioRef.current) {
+      transcribedAudioRef.current.pause();
+      transcribedAudioRef.current = null;
+      setIsTranscribedPlaying(false);
+      return;
+    }
+    // Open file picker
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset file input for future selections
+    e.target.value = "";
+
+    setIsTranscribing(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      // Use /transcribe-to-abc endpoint to get both ABC notation and audio
+      const response = await fetch("http://localhost:8000/transcribe-to-abc", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || "Transcription failed");
+      }
+
+      const result = await response.json();
+
+      // Update the notation in the parent component for sheet music display
+      if (onNotationChange && result.abc) {
+        onNotationChange(result.abc);
+      }
+
+      // Play the audio (base64 encoded)
+      if (result.audio_base64) {
+        const audioBlob = new Blob(
+          [Uint8Array.from(atob(result.audio_base64), c => c.charCodeAt(0))],
+          { type: 'audio/wav' }
+        );
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        transcribedAudioRef.current = audio;
+
+        audio.onended = () => {
+          transcribedAudioRef.current = null;
+          setIsTranscribedPlaying(false);
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        await audio.play();
+        setIsTranscribedPlaying(true);
+      }
+    } catch (err) {
+      console.error("Transcription error:", err);
+      alert(`Transcription error: ${err}`);
+    } finally {
+      setIsTranscribing(false);
+    }
+  }, [onNotationChange]);
+
   return (
     <div className="relative w-full h-full">
       {/* Hidden audio control div */}
       <div ref={audioControlRef} className="hidden" />
-      
-      {/* Play Button */}
-      <button
-        onClick={handlePlayPro}
-        disabled={isProLoading}
-        className="absolute top-2 right-2 z-10 flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 text-white text-sm font-medium rounded-md transition-colors shadow-md"
-        title="High-quality playback (FluidSynth)"
-      >
-        {isProLoading ? (
-          <>
-            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-            Synthesizing...
-          </>
-        ) : isProPlaying ? (
-          <>
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="4" width="4" height="16" />
-              <rect x="14" y="4" width="4" height="16" />
-            </svg>
-            Stop
-          </>
-        ) : (
-          <>
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <polygon points="5,3 19,12 5,21" />
-            </svg>
-            Play
-          </>
-        )}
-      </button>
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="audio/wav,audio/*"
+        onChange={handleFileSelected}
+        className="hidden"
+      />
+
+      {/* Button Container */}
+      <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
+        {/* Transcribe Button */}
+        <button
+          onClick={handleTranscribeClick}
+          disabled={isTranscribing}
+          className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 text-white text-sm font-medium rounded-md transition-colors shadow-md"
+          title="Upload audio and transcribe to piano"
+        >
+          {isTranscribing ? (
+            <>
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Transcribing...
+            </>
+          ) : isTranscribedPlaying ? (
+            <>
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <rect x="6" y="4" width="4" height="16" />
+                <rect x="14" y="4" width="4" height="16" />
+              </svg>
+              Stop
+            </>
+          ) : (
+            <>
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z" />
+              </svg>
+              Transcribe Audio
+            </>
+          )}
+        </button>
+
+        {/* Play Button */}
+        <button
+          onClick={handlePlayPro}
+          disabled={isProLoading}
+          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 text-white text-sm font-medium rounded-md transition-colors shadow-md"
+          title="High-quality playback (FluidSynth)"
+        >
+          {isProLoading ? (
+            <>
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Synthesizing...
+            </>
+          ) : isProPlaying ? (
+            <>
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <rect x="6" y="4" width="4" height="16" />
+                <rect x="14" y="4" width="4" height="16" />
+              </svg>
+              Stop
+            </>
+          ) : (
+            <>
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <polygon points="5,3 19,12 5,21" />
+              </svg>
+              Play
+            </>
+          )}
+        </button>
+      </div>
 
       {/* Sheet Music Container */}
       <div
@@ -331,3 +454,4 @@ export default function AbcRenderer({
     </div>
   );
 }
+

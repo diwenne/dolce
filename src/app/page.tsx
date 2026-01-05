@@ -27,6 +27,11 @@ export default function Home() {
     setAbcNotation(e.target.value);
   };
 
+  // Callback for when transcription updates the notation
+  const handleTranscriptionResult = useCallback((newNotation: string) => {
+    setAbcNotation(newNotation);
+  }, []);
+
   const handleElementClick = useCallback(
     (position: { start: number; end: number }) => {
       if (textareaRef.current) {
@@ -108,6 +113,7 @@ export default function Home() {
             <AbcRenderer
               notation={abcNotation}
               onElementClick={handleElementClick}
+              onNotationChange={handleTranscriptionResult}
             />
           </div>
         </div>

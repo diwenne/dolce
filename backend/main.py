@@ -9,11 +9,14 @@ import tempfile
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import music21
+import torch
+import librosa
+from piano_transcription_inference import PianoTranscription, sample_rate as pt_sample_rate
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,7 +28,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
-print("\n\n--- LOADED LATEST VERSION (Refactor Complete) ---\n\n")
+print("\n\n--- LOADED LATEST VERSION (With Piano Transcription) ---\n\n")
 
 # CORS for frontend
 app.add_middleware(
@@ -38,6 +41,31 @@ app.add_middleware(
 
 # Path to SoundFont directory
 SOUNDFONT_DIR = Path(__file__).parent / "soundfonts"
+
+# Path to piano transcription model checkpoint
+CHECKPOINT_PATH = Path.home() / "piano_transcription_inference_data" / "note_F1=0.9677_pedal_F1=0.9186.pth"
+
+# Lazy-loaded transcriptor
+_transcriptor = None
+
+# Detect device once at module level
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f"Using device: {DEVICE}" + (" (GPU acceleration enabled)" if DEVICE == 'cuda' else " (CPU mode - slower)"))
+
+
+def get_transcriptor():
+    """Get or create the piano transcriptor (lazy load for faster startup)."""
+    global _transcriptor
+    if _transcriptor is None:
+        logger.info(f"Initializing PianoTranscription on device: {DEVICE}")
+        logger.info(f"Loading checkpoint from: {CHECKPOINT_PATH}")
+        if not CHECKPOINT_PATH.exists():
+            raise RuntimeError(
+                f"Model checkpoint not found at {CHECKPOINT_PATH}. "
+                f"Please download from https://zenodo.org/record/4034264"
+            )
+        _transcriptor = PianoTranscription(device=DEVICE, checkpoint_path=str(CHECKPOINT_PATH))
+    return _transcriptor
 
 
 def find_soundfont() -> Path | None:
@@ -190,17 +218,268 @@ async def synthesize(request: SynthesizeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/transcribe")
+async def transcribe(file: UploadFile = File(...)):
+    """
+    Transcribe a WAV audio file to piano MIDI, then synthesize with SoundFont.
+    
+    Pipeline:
+    1. Load uploaded WAV with librosa
+    2. Transcribe to MIDI using piano_transcription_inference
+    3. Synthesize MIDI to WAV with FluidSynth
+    4. Return the synthesized audio
+    """
+    # Find SoundFont
+    soundfont = find_soundfont()
+    if soundfont is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No SoundFont (.sf2) found in {SOUNDFONT_DIR}."
+        )
+
+    # Create temp files
+    input_wav_path = None
+    midi_path = None
+    output_wav_path = None
+
+    try:
+        # Save uploaded file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as input_file:
+            input_wav_path = input_file.name
+            content = await file.read()
+            input_file.write(content)
+        
+        logger.info(f"Received audio file: {file.filename} ({len(content)} bytes)")
+
+        # Load audio with librosa at the correct sample rate
+        logger.info(f"Loading audio with librosa...")
+        audio, _ = librosa.load(input_wav_path, sr=pt_sample_rate, mono=True)
+        logger.info(f"Audio loaded: {len(audio)} samples at {pt_sample_rate}Hz")
+
+        # Transcribe to MIDI
+        logger.info("Transcribing audio to MIDI...")
+        transcriptor = get_transcriptor()
+        
+        with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as midi_file:
+            midi_path = midi_file.name
+        
+        transcriptor.transcribe(audio, midi_path)
+        logger.info(f"Transcription complete: {midi_path}")
+
+        # Synthesize MIDI to WAV
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as output_file:
+            output_wav_path = output_file.name
+
+        logger.info(f"Synthesizing with SoundFont: {soundfont}")
+        success = fluidsynth_midi_to_wav(midi_path, output_wav_path, str(soundfont))
+        
+        if not success:
+            raise Exception("FluidSynth synthesis failed")
+
+        # Clean up input and midi files
+        if input_wav_path and os.path.exists(input_wav_path):
+            os.unlink(input_wav_path)
+        if midi_path and os.path.exists(midi_path):
+            os.unlink(midi_path)
+
+        logger.info(f"Returning synthesized audio: {output_wav_path}")
+        return FileResponse(
+            output_wav_path,
+            media_type="audio/wav",
+            filename="transcribed_output.wav",
+        )
+
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        # Clean up temp files on error
+        for path in [input_wav_path, midi_path, output_wav_path]:
+            if path and os.path.exists(path):
+                os.unlink(path)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/transcribe-to-abc")
+async def transcribe_to_abc(file: UploadFile = File(...)):
+    """
+    Transcribe a WAV audio file to piano and return ABC notation + audio.
+    
+    This endpoint returns both the ABC notation (for sheet music display)
+    and the synthesized audio file (for playback).
+    
+    Returns JSON with:
+    - abc: ABC notation string
+    - audio_url: Path to download the audio
+    """
+    import base64
+    
+    # Find SoundFont
+    soundfont = find_soundfont()
+    if soundfont is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No SoundFont (.sf2) found in {SOUNDFONT_DIR}."
+        )
+
+    # Create temp files
+    input_wav_path = None
+    midi_path = None
+    output_wav_path = None
+
+    try:
+        # Save uploaded file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as input_file:
+            input_wav_path = input_file.name
+            content = await file.read()
+            input_file.write(content)
+        
+        logger.info(f"[ABC] Received audio file: {file.filename} ({len(content)} bytes)")
+
+        # Load audio with librosa at the correct sample rate
+        logger.info("[ABC] Loading audio with librosa...")
+        audio, _ = librosa.load(input_wav_path, sr=pt_sample_rate, mono=True)
+        logger.info(f"[ABC] Audio loaded: {len(audio)} samples at {pt_sample_rate}Hz")
+
+        # Transcribe to MIDI
+        logger.info("[ABC] Transcribing audio to MIDI...")
+        transcriptor = get_transcriptor()
+        
+        with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as midi_file:
+            midi_path = midi_file.name
+        
+        transcriptor.transcribe(audio, midi_path)
+        logger.info(f"[ABC] Transcription complete: {midi_path}")
+
+        # Convert MIDI to ABC notation using music21
+        logger.info("[ABC] Converting MIDI to ABC notation...")
+        midi_score = music21.converter.parse(midi_path)
+        
+        # Extract ABC notation
+        abc_notation = None
+        try:
+            # Create a simplified ABC representation
+            abc_lines = [
+                "X:1",
+                f"T:Transcribed from {file.filename}",
+                "C:Piano Transcription AI",
+                "M:4/4",
+                "L:1/8",
+                "Q:1/4=120",
+                "K:C",
+                "%%MIDI program 0",
+            ]
+            
+            # Get notes from the score
+            notes_and_rests = list(midi_score.flatten().notesAndRests)[:200]  # Limit to first 200 elements
+            
+            abc_notes = []
+            for element in notes_and_rests:
+                if isinstance(element, music21.note.Note):
+                    # Convert pitch to ABC notation
+                    pitch_name = element.pitch.name.replace('-', 'b')  # Flat
+                    octave = element.pitch.octave
+                    
+                    # ABC notation: C,, = C2, C, = C3, C = C4, c = C5, c' = C6
+                    if octave <= 3:
+                        abc_pitch = pitch_name.upper() + "," * (4 - octave)
+                    elif octave == 4:
+                        abc_pitch = pitch_name.upper()
+                    elif octave == 5:
+                        abc_pitch = pitch_name.lower()
+                    else:
+                        abc_pitch = pitch_name.lower() + "'" * (octave - 5)
+                    
+                    # Duration (simplified)
+                    duration = element.duration.quarterLength
+                    if duration >= 2:
+                        abc_pitch += str(int(duration * 2))
+                    elif duration == 0.5:
+                        abc_pitch = abc_pitch  # eighth note is default
+                    elif duration == 0.25:
+                        abc_pitch += "/2"
+                    
+                    abc_notes.append(abc_pitch)
+                elif isinstance(element, music21.note.Rest):
+                    abc_notes.append("z")
+                elif isinstance(element, music21.chord.Chord):
+                    # Handle chords
+                    chord_notes = []
+                    for p in element.pitches:
+                        pitch_name = p.name.replace('-', 'b')
+                        octave = p.octave
+                        if octave <= 3:
+                            abc_pitch = pitch_name.upper() + "," * (4 - octave)
+                        elif octave == 4:
+                            abc_pitch = pitch_name.upper()
+                        elif octave == 5:
+                            abc_pitch = pitch_name.lower()
+                        else:
+                            abc_pitch = pitch_name.lower() + "'" * (octave - 5)
+                        chord_notes.append(abc_pitch)
+                    abc_notes.append("[" + "".join(chord_notes) + "]")
+            
+            # Group notes into measures (8 eighth notes per measure in 4/4)
+            measures = []
+            for i in range(0, len(abc_notes), 8):
+                measure = " ".join(abc_notes[i:i+8])
+                measures.append(measure)
+            
+            abc_lines.append(" | ".join(measures) + " |]")
+            abc_notation = "\n".join(abc_lines)
+            logger.info(f"[ABC] Generated ABC notation ({len(abc_notation)} chars)")
+            
+        except Exception as abc_error:
+            logger.warning(f"[ABC] Could not generate ABC notation: {abc_error}")
+            abc_notation = f"X:1\nT:Transcription Error\nK:C\nz4 |]"
+
+        # Synthesize MIDI to WAV
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as output_file:
+            output_wav_path = output_file.name
+
+        logger.info(f"[ABC] Synthesizing with SoundFont: {soundfont}")
+        success = fluidsynth_midi_to_wav(midi_path, output_wav_path, str(soundfont))
+        
+        if not success:
+            raise Exception("FluidSynth synthesis failed")
+
+        # Read audio file and encode as base64
+        with open(output_wav_path, "rb") as audio_file:
+            audio_base64 = base64.b64encode(audio_file.read()).decode('utf-8')
+
+        # Clean up temp files
+        for path in [input_wav_path, midi_path, output_wav_path]:
+            if path and os.path.exists(path):
+                os.unlink(path)
+
+        logger.info("[ABC] Returning ABC notation and audio")
+        return {
+            "abc": abc_notation,
+            "audio_base64": audio_base64,
+            "device": DEVICE,
+        }
+
+    except Exception as e:
+        logger.error(f"[ABC] Transcription error: {e}")
+        # Clean up temp files on error
+        for path in [input_wav_path, midi_path, output_wav_path]:
+            if path and os.path.exists(path):
+                os.unlink(path)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/")
 def root():
     """Root endpoint with API info."""
     soundfont = find_soundfont()
     return {
         "name": "Legato Audio Synthesis API",
+        "device": DEVICE,
         "soundfont_status": "ready" if soundfont else "missing",
         "soundfont_path": str(soundfont) if soundfont else None,
         "endpoints": {
             "/health": "Health check",
             "/synthesize": "POST - Convert ABC to audio",
+            "/transcribe": "POST - Transcribe WAV to piano MIDI and synthesize",
+            "/transcribe-to-abc": "POST - Transcribe WAV and return ABC notation + audio",
         },
     }
 
