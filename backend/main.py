@@ -4,6 +4,7 @@ Uses music21 for ABC parsing and FluidSynth for high-quality audio synthesis.
 """
 
 import os
+import re
 import subprocess
 import tempfile
 import logging
@@ -77,6 +78,122 @@ def find_soundfont() -> Path | None:
     if sf2_files:
         return sf2_files[0]
     return None
+
+
+def preprocess_abc_for_midi(abc_content: str) -> str:
+    """
+    Preprocess ABC content to make it palatable for abc2midi.
+    This handles issues with multi-voice syntax, dynamics, and headers
+    that can cause abc2midi to fail or produce empty files.
+    """
+    lines = abc_content.split('\n')
+    processed_lines = []
+    in_header = True
+    
+    for line in lines:
+        stripped = line.strip()
+        if not stripped: 
+            continue
+            
+        if in_header:
+            if stripped.startswith('K:'):
+                in_header = False
+                processed_lines.append(line)
+                continue
+            
+            # Skip V lines in header (let them be defined lazily in body)
+            if stripped.startswith('V:'):
+                continue
+            # Skip comments
+            if stripped.startswith('%'):
+                continue
+                
+            processed_lines.append(line)
+            continue
+            
+        # In Body
+        if stripped.startswith('%'): continue
+        
+        if stripped.startswith('V:'):
+             # Just V:ID, strip everything else (Program, clef, etc)
+             # This ensures abc2midi recognizes the voice switch without getting confused by properties
+             match = re.match(r'^V:\s*([\w\d]+)', stripped)
+             if match:
+                 voice_id = match.group(1)
+                 processed_lines.append(f"V:{voice_id}")
+                 continue
+                 
+        # Strip dynamics !...! which can cause abc2midi to drop lines
+        line = re.sub(r'![^!]+!', '', line)
+        
+        # Strip inline comments
+        if '%' in line:
+            line = line.split('%')[0].strip()
+            
+        processed_lines.append(line)
+    
+    return '\n'.join(processed_lines)
+
+
+def abc2midi_convert(abc_content: str, midi_path: str) -> bool:
+    """
+    Convert ABC notation to MIDI using abc2midi command line tool.
+    This properly handles multi-voice notation that music21 struggles with.
+    Returns True on success, False on failure.
+    """
+    logger.info(f"Original ABC size: {len(abc_content)}")
+    
+    # Preprocess ABC to fix syntax issues
+    clean_abc = preprocess_abc_for_midi(abc_content)
+    logger.info(f"Preprocessed ABC size: {len(clean_abc)}")
+    logger.info(f"Preprocessed Head:\n{clean_abc[:200]}")
+    
+    # Write ABC to temp file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.abc', delete=False) as abc_file:
+        abc_file.write(clean_abc)
+        abc_path = abc_file.name
+    
+    try:
+        logger.info(f"Converting ABC to MIDI: {abc_path} -> {midi_path}")
+        result = subprocess.run(
+            ["abc2midi", abc_path, "-o", midi_path],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"abc2midi error: {result.stderr}")
+            # Also log stdout as abc2midi often prints errors there
+            logger.error(f"abc2midi stdout: {result.stdout}")
+            return False
+        
+        # Check if MIDI file was created and has content
+        if os.path.exists(midi_path):
+            size = os.path.getsize(midi_path)
+            logger.info(f"Generated MIDI size: {size} bytes")
+            if size > 0:
+                return True
+            else:
+                logger.error("abc2midi produced empty output")
+                return False
+        else:
+            logger.error("abc2midi did not produce output file")
+            return False
+            
+    except FileNotFoundError:
+        logger.error("abc2midi not found - install with: brew install abcmidi")
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error("abc2midi timed out")
+        return False
+    except Exception as e:
+        logger.error(f"abc2midi exception: {e}")
+        return False
+    finally:
+        # Clean up temp ABC file
+        if os.path.exists(abc_path):
+            os.unlink(abc_path)
 
 
 def fluidsynth_midi_to_wav(midi_path: str, wav_path: str, soundfont_path: str) -> bool:
@@ -163,30 +280,27 @@ async def synthesize(request: SynthesizeRequest):
         audio_path = audio_file.name
 
     try:
-        # Convert ABC to MIDI using music21
-        logger.info(f"Converting ABC to MIDI using music21 (direct string)")
-        try:
-            # Parse ABC content
-            s = music21.converter.parse(abc_content, format='abc')
-            
-            # Workaround for music21 stream duplication bug:
-            # Extract just the notes/rests into a fresh stream
-            from copy import deepcopy
-            fresh_stream = music21.stream.Score()
-            for part in s.parts:
-                new_part = music21.stream.Part()
-                for element in part.flatten().notesAndRests:
-                    new_part.append(deepcopy(element))
-                fresh_stream.append(new_part)
-            
-            # If no parts found, try to use the score directly
-            if len(fresh_stream.parts) == 0:
-                fresh_stream = s
-            
-            fresh_stream.write('midi', fp=midi_path)
-        except Exception as e:
-            logger.error(f"music21 conversion error: {e}")
-            raise Exception(f"music21 conversion failed: {e}")
+        # Convert ABC to MIDI using abc2midi (better multi-voice support)
+        abc_success = abc2midi_convert(abc_content, midi_path)
+        
+        if not abc_success:
+            # Fallback to music21 if abc2midi fails
+            logger.info("abc2midi failed, falling back to music21")
+            try:
+                s = music21.converter.parse(abc_content, format='abc')
+                from copy import deepcopy
+                fresh_stream = music21.stream.Score()
+                for part in s.parts:
+                    new_part = music21.stream.Part()
+                    for element in part.flatten().notesAndRests:
+                        new_part.append(deepcopy(element))
+                    fresh_stream.append(new_part)
+                if len(fresh_stream.parts) == 0:
+                    fresh_stream = s
+                fresh_stream.write('midi', fp=midi_path)
+            except Exception as e:
+                logger.error(f"music21 fallback failed: {e}")
+                raise Exception(f"ABC to MIDI conversion failed: {e}")
 
         # Synthesize to MIDI using direct FluidSynth call
         logger.info(f"Synthesizing with SoundFont: {soundfont}")

@@ -3,20 +3,128 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import AbcRenderer from "@/components/AbcRenderer";
 
-const DEFAULT_ABC = `X:1
-T:Für Elise
+const DEFAULT_ABC = `X:1759
+T:Fur Elise (with extra dynamics)
+T:Bagatelle No.25 in A, WoO.59
 C:Ludwig van Beethoven
+Z:Base ABC transcription: Frank Nordberg (Musica Viva). Dynamics added.
+V:1
+V:2 clef=bass
 M:3/8
 L:1/16
-Q:1/8=65
+Q:3/8=40
 K:Am
-%%MIDI program 0
-!pp! e'^d' | !p! e'^d' e'^d' e'B d'c' | !mp! A4 z CEA | B4 z E^GB | !mf! c'4 z Ee'^d' |
-!p! e'^d' e'^d' e'Bd'c' | A4 z CEA | B4 z Ec'B |1 !pp! A4 :|2 !pp! A4 ||
-!mf! Bc'd' | !f! e4 Ge'c' | d4 Fd'B | !mf! c4 EA^d | !p! e4 z ee |
-!pp! e4 ^de | fe4 d | !mf! c4 BA | !p! c4 z Ee'^d' |
-!p! e'^d' e'^d' e'Bd'c' | !mp! A4 z CEA | B4 z E^GB | !mf! c'4 z Ee'^d' |
-!p! e'^d' e'^d' e'Bd'c' | A4 z CEA | B4 z Ec'B | !pp! A4 z2 |]
+%%staves {(1) (2)}
+
+V:1
+!pp!e^d|e^deB=dc|A2 z !p!CEA|B2 z E^GB|c2 z Ee^d|
+V:2
+z2|z6|A,,E,A, z z2|E,,E,^G, z z2|A,,E,A, z z2|
+%
+V:1
+e^deB=dc|A2 z CEA|B2 z EcB|[1A2 z2:|[2A2z !<(!Bcd!<)!|
+V:2
+z6|A,,E,A, z z2|E,,E,^G, z z2|[1A,,E,A, z :|[2A,,E,A, z z2|
+%
+V:1
+|:!mp!e3 Gfe|d3 !mf!Fed|c3 Edc|B2 z !>(!Ee z!>)!|z ee' z z ^d|
+V:2
+|:C,E,C z z2|G,,G,B, z z2|A,,E,A, z z2|E,,E,E z z E|e z z ^de z|
+%
+V:1
+!p!e z z ^ded|e^deB=dc|A2 z CEA|B2 z E^GB|c2 z Ee^d|
+V:2
+z ^de z z2|z6|A,,E,A, z z2|E,,E,^G, z z2|A,,E,A, z z2|
+%
+V:1
+e^deB=dc|A2 z CEA|B2 z EcB|[1A2 z Bcd:|
+V:2
+z6|A,,E,A, z z2|E,,E,^G, z z2|[1A,,E,A, z z2:|
+%
+V:1
+[2!mf!A2 z [Ec][Fc][EGc]|c4 !<(!f>e!<)!|!f!e2d2 _b>a|agfedc|
+V:2
+[2A,,E,A, [_B,C][A,C][G,B,C]|F,A,CA,CA,|F,_B,DB,DB,|F,E[F,G,_B,]E[F,G,B,]E|
+%
+V:1
+!mf!_B2A2 A/G/A/B/|c4 d^d|!<(!e3 efA!<)!|c4 !f!d>B|
+V:2
+F,A,CA,CA,|F,A,CA,CA,|E,A,CA,[D,D]F,|G,EG,EG,F|
+%
+V:1
+!f!c/g/G/g/ A/g/B/g/ c/g/d/g/|e/g/c'/b/ a/g/f/e/ d/g/f/d/|c/g/G/g/ A/g/B/g/ c/g/d/g/|
+V:2
+[C2E2] z [FG][EG][DFG]|[C2E2G2] [F,2A,2][F,2A,2]|C2 z [FG][EG][DFG]|
+%
+V:1
+e/g/c'/b/ a/g/f/e/ d/g/f/d/|!>(!e/f/e/^d/ e/B/e/d/ e/B/e/d/!>)!|!p!e3 Be^d|e3 Be z|
+V:2
+[C2E2G2] [F,2A,2][G,2B,2]|[^G,2B,2] z2 z2|z6|z4 z ^d|
+%
+V:1
+z ^de z z d|!pp!e^deB=dc|A2 z CEA|B2 z E^GB|c2 z Ee^d|
+V:2
+e z z ^de z|z6|A,,E,A, z z2|E,,E,^G, z z2|A,,E,A, z z2|
+%
+V:1
+e^deB=dc|A2 z CEA|B2 z EcB|A2 z Bcd|!mp!e3 Gfe|
+V:2
+z6|A,,E,A, z z2|E,,E,^G, z z2|A,,E,A, z z2|C,E,C z z2|
+%
+V:1
+d3 !mf!Fed|c3 Edc|B2 z Ee z|z ee' zz ^d|!p!e z z ^ded|
+V:2
+G,,G,B, z z2|A,,E,A, z z2|E,,E,E z z E|e z z ^de z|z ^de z z2|
+%
+V:1
+e^deB=dc|A2 z CEA|B2 z E^GB|c2 z Ee^d|e^deB=dc|A2 z CEA|
+V:2
+z6|A,,E,A, z z2|E,,E,^G, z z2|A,,E,A, z z2|z6|A,,E,A, z z2|
+%
+V:1
+B2 z EcB|A2 z2 z2|!<(![E6G6_B6^c6]!<)!|!f![F4A4d4][^ce][df]|[^G4d4f4][G2d2f2]|!ff![A6c6e6]|
+V:2
+E,,E,^G, z z2|A,,A,,A,,A,,A,,A,,|A,,A,,A,,A,,A,,A,,|A,,A,,A,,A,,A,,A,,|A,,A,,A,,A,,A,,A,,|A,,A,,A,,A,,A,,A,,|
+%
+V:1
+!ff![F4d4][Ec][DB]|[C4^F4A4][C2A2][C2A2][E2c2][D2B2]|!mf![C6A6]|[E6G6_B6^c6]|[F4A4d4][^ce][df]|
+V:2
+[D,,A,,][D,,A,,][D,,A,,][D,,A,,][D,,A,,][D,,A,,]|[^D,,A,,][D,,A,,][D,,A,,][D,,A,,][D,,A,,][D,,A,,]|[E,,A,,][E,,A,,][E,,A,,][E,,A,,][E,,^G,,][E,,G,,]|[A,,,A,,]A,,A,,A,,A,,A,,|A,,A,,A,,A,,A,,A,,|A,,A,,A,,A,,A,,A,,|
+%
+V:1
+!mf![d4f4][d2f2]|[d6f6]|[G4_e4][Fd][_Ec]|[D4F4_B4][D2F2A2]|[D4F4^G4][D2F2G2]|!p![C2E2A2] z2 z2|
+V:2
+A,,A,,A,,A,,A,,A,,|_B,,B,,B,,B,,B,,B,,|_B,,B,,B,,B,,B,,B,,|_B,,B,,B,,B,,B,,B,,|=B,,B,,B,,B,,B,,B,,|C,2 z2 z2|
+%
+V:1
+!pp![E2B2] z2 z2|(3A,CE (3Ace (3dcB|(3Ace (3ac'e' (3d'c'b|(3Ace (3ac'e' (3d'c'b|
+V:2
+[E,2^G,2] z2 z2|A,,,2 z2 [A,2C2E2]|[A,2C2E2] z2 [A,2C2E2]|[A,2C2E2] z2 [A,2C2E2]|
+%
+V:1
+(3_ba_a (3g_gf (3e_ed|(3_d'c'b (3_ba_b (3g_gf|!p!e^deB=dc|A2 z CEA|
+V:2
+[A,2C2E2] z2 z2|z6|z6|A,,E,A, z z2|
+%
+V:1
+B2 z E^GB|c2 z Ee^d|e^deB=dc|A2 z CEA|B2 z EcB|
+V:2
+E,,E,^G, z z2|A,,E,A, z z2|z6|A,,E,A, z z2|E,,E,^G, z z2|
+%
+V:1
+A2 z Bcd|!mp!e3 Gfe|d3 Fed|c3 !>(!Edc!>)!|B2 z !pp!Ee z|
+V:2
+A,,E,A, z z2|C,E,C z z2|G,,G,B, z z2|A,,E,A, z z2|E,,E,E z z E|
+%
+V:1
+z ee' z z ^d|e z z ^ded|e^deB=dc|A2 z CEA|B2 z E^GB|
+V:2
+e z z ^de z|z ^de z z2|z6|A,,E,A, z z2|E,,E,^G, z z2|
+%
+V:1
+c2 z Ee^d|e^deB=dc|A2 z CEA|B2 z DcB|!pp![C4A4]|]
+V:2
+A,,E,A, z z2|z6|A,,E,A, z z2|E,,E,^G, z z2|[A,,,4A,,4]|]
 `;
 
 export default function Home() {

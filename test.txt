@@ -3,8 +3,8 @@ T:Fur Elise (with extra dynamics)
 T:Bagatelle No.25 in A, WoO.59
 C:Ludwig van Beethoven
 Z:Base ABC transcription: Frank Nordberg (Musica Viva). Dynamics added.
-V:1 Program 1 0 %Piano
-V:2 Program 1 0 bass %Piano
+V:1
+V:2 clef=bass
 M:3/8
 L:1/16
 Q:3/8=40
