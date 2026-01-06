@@ -69,7 +69,9 @@ def get_transcriptor():
     return _transcriptor
 
 
-def find_soundfont() -> Path | None:
+from typing import Optional
+
+def find_soundfont() -> Optional[Path]:
     """Find any .sf2 file in the soundfonts directory."""
     if not SOUNDFONT_DIR.exists():
         return None
